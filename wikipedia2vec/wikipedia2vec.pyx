@@ -77,6 +77,7 @@ cdef class Wikipedia2Vec:
     cdef dict _train_params
     cdef public np.ndarray syn0
     cdef public np.ndarray syn1
+    cdef public np.ndarray pinned
 
     def __init__(self, dictionary):
         self._dictionary = dictionary
@@ -225,7 +226,7 @@ cdef class Wikipedia2Vec:
         return ret
 
     def train(self, dump_db, link_graph, mention_db, tokenizer, sentence_detector, pool_size,
-              chunk_size, progressbar=True, **kwargs):
+              chunk_size, progressbar=True, eng_embs=[], **kwargs):
         start_time = time.time()
 
         params = _Parameters(kwargs)
@@ -272,12 +273,22 @@ cdef class Wikipedia2Vec:
         dim_size = params.dim_size
         syn0_shared = multiprocessing.RawArray(c_float, dim_size * vocab_size)
         syn1_shared = multiprocessing.RawArray(c_float, dim_size * vocab_size)
+        pinned_shared = multiprocessing.RawArray(c_int32, vocab_size)
 
         self.syn0 = np.frombuffer(syn0_shared, dtype=np.float32).reshape(vocab_size, dim_size)
         self.syn1 = np.frombuffer(syn1_shared, dtype=np.float32).reshape(vocab_size, dim_size)
+        self.pinned = np.frombuffer(pinned_shared, dtype=np.int32)
 
         self.syn0[:] = (np.random.rand(vocab_size, dim_size) - 0.5) / dim_size
         self.syn1[:] = np.zeros((vocab_size, dim_size))
+        self.pinned[:] = np.zeros((vocab_size, ))
+
+        if eng_embs:
+            logger.info('Fixing Embeddings of English Entities')
+            for lang_item, (eng_syn0, eng_syn1) in eng_embs:
+                self.syn0[lang_item.index] = eng_syn0
+                self.syn1[lang_item.index] = eng_syn1
+                self.pinned[lang_item.index] = 1
 
         total_page_count = dump_db.page_size() * params.iteration
         alpha = multiprocessing.RawValue(c_float, params.init_alpha)
@@ -304,6 +315,7 @@ cdef class Wikipedia2Vec:
             sentence_detector,
             syn0_shared,
             syn1_shared,
+            pinned_shared,
             word_neg_table,
             entity_neg_table,
             exp_table,
@@ -395,6 +407,7 @@ cdef tokenizer
 cdef sentence_detector
 cdef float32_t [:, :] syn0
 cdef float32_t [:, :] syn1
+cdef int32_t [:] pinned
 cdef int32_t [:] word_neg_table
 cdef int32_t [:] entity_neg_table
 cdef float32_t [:] exp_table
@@ -408,10 +421,10 @@ cdef float32_t [:] work
 
 
 def init_worker(dump_db_, dictionary_obj, link_graph_obj, mention_db_obj, tokenizer_,
-                sentence_detector_, syn0_shared, syn1_shared, word_neg_table_, entity_neg_table_,
+                sentence_detector_, syn0_shared, syn1_shared, pinned_shared, word_neg_table_, entity_neg_table_,
                 exp_table_, sample_ints_, link_indices_, link_cursor_, alpha_, params_,
                 total_page_count_):
-    global dump_db, dictionary, link_graph, mention_db, tokenizer, sentence_detector, syn0, syn1,\
+    global dump_db, dictionary, link_graph, mention_db, tokenizer, sentence_detector, syn0, syn1, pinned,\
         word_neg_table, entity_neg_table, exp_table, sample_ints, link_indices, link_cursor, alpha,\
         params, total_page_count, work
 
@@ -445,8 +458,8 @@ def init_worker(dump_db_, dictionary_obj, link_graph_obj, mention_db_obj, tokeni
 
     syn0 = np.frombuffer(syn0_shared, dtype=np.float32).reshape(-1, params.dim_size)
     syn1 = np.frombuffer(syn1_shared, dtype=np.float32).reshape(-1, params.dim_size)
+    pinned = np.frombuffer(pinned_shared, dtype=np.int32)
     work = np.zeros(params.dim_size, dtype=np.float32)
-
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -646,6 +659,8 @@ cdef inline void _train_pair(int32_t index1, int32_t index2, float32_t alpha, in
         g = (label - f) * alpha
 
         blas.saxpy(&dim_size, &g, &syn1[index, 0], &one, &work[0], &one)
-        blas.saxpy(&dim_size, &g, &syn0[index1, 0], &one, &syn1[index, 0], &one)
+        if pinned[index] == 0:
+            blas.saxpy(&dim_size, &g, &syn0[index1, 0], &one, &syn1[index, 0], &one)
 
-    blas.saxpy(&dim_size, &onef, &work[0], &one, &syn0[index1, 0], &one)
+    if pinned[index1] == 0:
+        blas.saxpy(&dim_size, &onef, &work[0], &one, &syn0[index1, 0], &one)
