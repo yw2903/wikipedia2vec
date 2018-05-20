@@ -14,6 +14,7 @@ from .wikipedia2vec import Wikipedia2Vec
 from .utils.wiki_dump_reader import WikiDumpReader
 from .utils.tokenizer import get_tokenizer, get_default_tokenizer
 from .utils.sentence_detector import get_sentence_detector
+from .interlink import Interlink
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,8 @@ def build_mention_db(dump_db_file, dictionary_file, out_file, tokenizer, **kwarg
 @click.argument('dump_db_file', type=click.Path(exists=True))
 @click.argument('dictionary_file', type=click.Path(exists=True))
 @click.argument('out_file', type=click.Path())
+@click.option('--trg-model-file', type=click.Path(exists=True))
+@click.option('--interlink-file', type=click.Path(exists=True))
 @click.option('--link-graph', type=click.Path(exists=True), help='The link graph file generated '
               'using the build_link_graph command')
 @click.option('--mention-db', type=click.Path(exists=True), help='The mention DB file generated '
@@ -234,7 +237,7 @@ def build_mention_db(dump_db_file, dictionary_file, out_file, tokenizer, **kwarg
 @train_embedding_options
 @common_options
 def train_embedding(dump_db_file, dictionary_file, link_graph, mention_db, tokenizer, sent_detect,
-                    out_file, **kwargs):
+                    out_file, trg_model_file, interlink_file, **kwargs):
     dump_db = DumpDB(dump_db_file)
     dictionary = Dictionary.load(dictionary_file)
 
@@ -252,8 +255,15 @@ def train_embedding(dump_db_file, dictionary_file, link_graph, mention_db, token
     if sent_detect is not None:
         sent_detect = get_sentence_detector(sent_detect, dump_db.language)
 
+    if trg_model_file:
+        trg_model = Wikipedia2Vec.load(trg_model_file)
+        interlink = Interlink.load(interlink_file)
+        trg_embs = list(interlink.get_trg_embs(trg_model))
+    else:
+        trg_emns = []
+
     wiki2vec = Wikipedia2Vec(dictionary)
-    wiki2vec.train(dump_db, link_graph, mention_db, tokenizer, sent_detect, **kwargs)
+    wiki2vec.train(dump_db, link_graph, mention_db, tokenizer, sent_detect, trg_embs=trg_embs, **kwargs)
 
     wiki2vec.save(out_file)
 

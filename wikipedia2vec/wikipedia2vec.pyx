@@ -226,7 +226,7 @@ cdef class Wikipedia2Vec:
         return ret
 
     def train(self, dump_db, link_graph, mention_db, tokenizer, sentence_detector, pool_size,
-              chunk_size, progressbar=True, eng_embs=[], **kwargs):
+              chunk_size, progressbar=True, trg_embs=[], **kwargs):
         start_time = time.time()
 
         params = _Parameters(kwargs)
@@ -283,9 +283,9 @@ cdef class Wikipedia2Vec:
         self.syn1[:] = np.zeros((vocab_size, dim_size))
         self.pinned[:] = np.zeros((vocab_size, ))
 
-        if eng_embs:
+        if trg_embs:
             logger.info('Fixing Embeddings of English Entities')
-            for lang_item, (eng_syn0, eng_syn1) in eng_embs:
+            for lang_item, (eng_syn0, eng_syn1) in trg_embs:
                 self.syn0[lang_item.index] = eng_syn0
                 self.syn1[lang_item.index] = eng_syn1
                 self.pinned[lang_item.index] = 1
