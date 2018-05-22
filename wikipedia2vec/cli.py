@@ -92,6 +92,7 @@ def train_embedding_options(func):
     @click.option('--entity-neg-power', type=float, default=0, help='Negative sampling of '
                   'entities is performed based on the probability proportional to the frequency '
                   'raised to the power specified by this option')
+    @click.option('--entity-weight', type=float, default=1.0)
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)

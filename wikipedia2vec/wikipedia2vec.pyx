@@ -58,6 +58,7 @@ cdef class _Parameters:
     cdef public float32_t sample
     cdef public int32_t iteration
     cdef public int32_t entities_per_page
+    cdef public float32_t entity_weight
     cdef dict _params
 
     def __init__(self, params):
@@ -619,8 +620,8 @@ def train_page(tuple arg):
                 if sentence_detector is not None and sent_char_pos[ent_start] != sent_token_pos[j]:
                     continue
 
-                _train_pair(entity, word2, alpha_, params.negative, word_neg_table)
-                _train_pair(word2, entity, alpha_, params.negative, entity_neg_table)
+                _train_pair(entity, word2, params.entity_weight * alpha_, params.negative, word_neg_table)
+                _train_pair(word2, entity, params.entity_weight * alpha_, params.negative, entity_neg_table)
 
     alpha.value = max(params.min_alpha, params.init_alpha * (1.0 - n / total_page_count))
 
