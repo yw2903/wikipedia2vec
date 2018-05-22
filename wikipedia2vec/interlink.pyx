@@ -15,7 +15,7 @@ cdef class Interlink:
         return len(self.links)
 
     def get_trg_embs(self, trg_model):
-        for src_item, trg_item in self.links:
+        for trg_item, src_item in self.links:
             trg_syn0 = trg_model.syn0[trg_item.index]
             trg_syn1 = trg_model.syn1[trg_item.index]
             yield src_item, (trg_syn0, trg_syn1)
