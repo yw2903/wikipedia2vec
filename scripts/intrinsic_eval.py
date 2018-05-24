@@ -35,7 +35,7 @@ def main(data_dir, model_file, out_format, word_analogy, word_similarity, entity
 
     results = []
 
-    if word_similarity:
+    if word_similarity and os.path.isdir(os.path.join(data_dir, 'word', 'similarity')):
         base_dir = os.path.join(os.path.join(data_dir, 'word'), 'similarity')
         for filename in os.listdir(base_dir):
             if not filename.endswith('.txt'):
@@ -66,7 +66,7 @@ def main(data_dir, model_file, out_format, word_analogy, word_similarity, entity
 
                 results.append((filename[:-4], spearmanr(gold, estimated)[0], oov_count))
 
-    if word_analogy:
+    if word_analogy and os.path.isdir(os.path.join(data_dir, 'word', 'analogy')):
         base_dir = os.path.join(os.path.join(data_dir, 'word'), 'analogy')
         for filename in os.listdir(base_dir):
             with open(os.path.join(base_dir, filename)) as f:
@@ -107,7 +107,7 @@ def main(data_dir, model_file, out_format, word_analogy, word_similarity, entity
 
                 results.append((filename[:-4], np.mean(np.hstack(predictions) == D_ind), oov_count))
 
-    if entity_similarity:
+    if entity_similarity and os.path.isdir(os.path.join(data_dir, 'entity', 'similarity')):
         category_mapping = {e: c for (c, l) in KORE_CATEGORIES.items() for e in l}
 
         base_dir = os.path.join(os.path.join(data_dir, 'entity'), 'similarity')

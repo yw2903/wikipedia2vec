@@ -27,6 +27,8 @@ def main(data_dir, src_model_file, trg_model_file, word, entity):
             if not filename.endswith('.txt'):
                 continue
 
+            print(filename)
+
             bi_dict = defaultdict(list)
             with open(os.path.join(data_dir, 'word', filename)) as f:
                 for line in f:
@@ -60,6 +62,8 @@ def main(data_dir, src_model_file, trg_model_file, word, entity):
         for filename in os.listdir(os.path.join(data_dir, 'entity')):
             if not filename.endswith('.txt'):
                 continue
+
+            print(filename)
 
             bi_dict = defaultdict(list)
             with open(os.path.join(data_dir, 'entity', filename)) as f:
