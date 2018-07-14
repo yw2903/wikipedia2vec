@@ -77,7 +77,10 @@ def get_emb(dictionary, matrix, n_vocab):
     items = sorted(items, key=lambda item: item.count, reverse=True)
     items = items[:n_vocab]
     limited_matrix = np.zeros(shape=(n_vocab, matrix.shape[1]), dtype='float32')
+    ind2ind = {}
     for i, item in enumerate(items):
         limited_matrix[i] = matrix[item.index]
+        ind2ind[item.index] = i
 
-    return [item.text if isinstance(item, Word) else item.title for item in items], limited_matrix
+    
+    return ind2ind, limited_matrix

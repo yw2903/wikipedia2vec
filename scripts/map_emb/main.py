@@ -152,7 +152,7 @@ def induce_dictionary(xw, zw,
     return src_indices, trg_indices, objective
 
 class Validater:
-    def __init__(self, path, src_word2ind, trg_word2ind):
+    def __init__(self, path, src_dic, trg_dic, src_ind2ind, trg_ind2ind):
         oov = set()
         vocab = set()
         self.validation = collections.defaultdict(set)
@@ -161,8 +161,14 @@ class Validater:
             for line in f:
                 src, trg = line.strip().split()
                 try:
-                    src_ind = src_word2ind[src]
-                    trg_ind = trg_word2ind[trg]
+                    src = src_dic.get_word(src)
+                    trg = trg_dic.get_word(trg)
+
+                    if src is None or trg is None:
+                        raise KeyError()
+
+                    src_ind = src_ind2ind[src.index]
+                    trg_ind = trg_ind2ind[trg.index]
                     self.validation[src_ind].add(trg_ind)
                     vocab.add(src)
                 except KeyError:
@@ -189,7 +195,7 @@ class Validater:
 @click.option('--init_dropout', type=float, default=0.9)
 @click.option('--dropout_decay', type=float, default=2.0)
 @click.option('--threshold', type=float, default=1e-6)
-@click.option('--interval', type=int, default=50)
+@click.option('--interval', type=int, default=5)
 @click.option('--n_vocab', type=int, default=20000)
 @click.option('--init_n_vocab', type=int, default=4000)
 @click.option('--n_csls', type=int, default=10)
@@ -207,17 +213,17 @@ def main(src_input, trg_input, src_output, trg_output, normalize, validation,
     embeddings.normalize(x_full, normalize)
     embeddings.normalize(z_full, normalize)
 
-    src_words, x = embeddings.get_emb(src_wiki2vec.dictionary, x_full, n_vocab)
-    trg_words, z = embeddings.get_emb(trg_wiki2vec.dictionary, z_full, n_vocab)
-
-    src_word2ind = {word: i for i, word in enumerate(src_words)}
-    trg_word2ind = {word: i for i, word in enumerate(trg_words)}
+    src_ind2ind, x = embeddings.get_emb(src_wiki2vec.dictionary, x_full, n_vocab)
+    trg_ind2ind, z = embeddings.get_emb(trg_wiki2vec.dictionary, z_full, n_vocab)
+    src_ind2ind_inv = {matrix_ind: item_ind for item_ind, matrix_ind in src_ind2ind.items()}
+    trg_ind2ind_inv = {matrix_ind: item_ind for item_ind, matrix_ind in trg_ind2ind.items()}
 
     src_indices, trg_indices = init_unsupervised(x, z, 
             n_vocab=init_n_vocab, csls_neighborhood=n_csls, normalize=normalize)
 
     if validation is not None:
-        validater = Validater(validation, src_word2ind, trg_word2ind)
+        validater = Validater(validation, src_wiki2vec.dictionary, trg_wiki2vec.dictionary,
+                src_ind2ind, trg_ind2ind)
         logger.info("Validation Coverage: {}".format(validater.coverage))
 
     best_objective = objective = -100.
@@ -248,15 +254,15 @@ def main(src_input, trg_input, src_output, trg_output, normalize, validation,
 
         it += 1
 
-    
-    xw_full, zw_full = mapping(x_full, z_full, src_indices, trg_indices)
+    xw_full, zw_full = mapping(x_full, z_full, 
+            [src_ind2ind_inv[ind] for ind in src_indices],
+            [trg_ind2ind_inv[ind] for ind in trg_indices])
     mapped_src = Wikipedia2Vec(src_wiki2vec.dictionary)
     mapped_trg = Wikipedia2Vec(trg_wiki2vec.dictionary)
     mapped_src.syn0 = xw_full
     mapped_trg.syn0 = zw_full
     mapped_src.save(src_output)
     mapped_trg.save(trg_output)
-
 
 if __name__ == '__main__':
     main()
