@@ -17,9 +17,9 @@ def main(input):
                 continue
             
             src_title = src.path.split('/')[-1]
-            trg_title = src.path.split('/')[-1]
+            trg_title = trg.path.split('/')[-1]
             if src_title and trg_title:
-                print("{}\t{}".format(src_title, trg_title))
+                print("{}\t{}".format(trg_title, src_title))
 
 if __name__ == '__main__':
     main()
