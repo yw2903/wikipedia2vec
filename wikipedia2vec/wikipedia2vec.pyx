@@ -134,6 +134,51 @@ cdef class Wikipedia2Vec:
             train_params=self._train_params
         ), out_file)
 
+    def save_text_sorted(self, out_file, out_format='default', words=True, entities=True):
+        """
+        words:
+            True: すべて保存する
+            False: 一つも保存しない
+            自然数: 頻度の高いn個
+        """
+        # Get vocabsize
+        if words == True:
+            words = self.dictionary.word_size
+        elif words == False:
+            words = 0
+
+        if entities == True:
+            entities = self.dictionary.word_size
+        elif entities == False:
+            entities = 0
+
+        vocabsize = words + entities
+
+        with open(out_file, 'w') as f:
+            f.write("{} {}\n".format(vocabsize, len(self.syn0[0])))
+
+            for i, word in enumerate(self.dictionary.words(ordered=True)):
+                if i >= words:
+                    break
+
+                vec_str = ' '.join('{:.4f}'.format(v) for v in self.get_vector(word))
+
+                if out_format in ('word2vec', 'glove'):
+                    f.write("{} {}\n".format(word.text, vec_str))
+                else:
+                    f.write("{}\t{}\n".format(word.text, vec_str))
+
+            for i, entity in enumerate(self.dictionary.entities(ordered=True)):
+                if i >= entities:
+                    break
+
+                vec_str = ' '.join('{:.4f}'.format(v) for v in self.get_vector(word))
+
+                if out_format in ('word2vec', 'glove'):
+                    f.write("ENTITY/{} {}\n".format(entity.title, vec_str))
+                else:
+                    f.write("ENTITY/{}\t{}\n".format(entity.title, vec_str))
+
     def save_text(self, out_file, out_format='default'):
         with open(out_file, 'wb') as f:
             if out_format == 'word2vec':
