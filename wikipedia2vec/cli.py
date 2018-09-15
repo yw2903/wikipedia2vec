@@ -263,6 +263,17 @@ def train_embedding(dump_db_file, dictionary_file, link_graph, mention_db, token
 @click.argument('out_file', type=click.Path())
 @click.option('--out-format', default='default',
               type=click.Choice(['default', 'word2vec', 'glove']))
-def save_text(model_file, out_file, out_format='default'):
+@click.option('--ordered/--not-ordered', default=False)
+@click.option('--words', default=False)
+@click.option('--entities', default=False)
+def save_text(model_file, out_file, out_format='default', ordered=False, words=False, entities=False):
     wiki2vec = Wikipedia2Vec.load(model_file)
-    wiki2vec.save_text(out_file, out_format)
+
+    if ordered:
+        if isinstance(words, str):
+            words = int(words)
+        if isinstance(entities, str):
+            entities = int(entities)
+        wiki2vec.save_text_sorted(out_file, out_format=out_format, words=words, entities=entities)
+    else:
+        wiki2vec.save_text(out_file, out_format)
