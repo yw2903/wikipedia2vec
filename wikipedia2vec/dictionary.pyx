@@ -98,19 +98,31 @@ cdef class Dictionary:
     def __iter__(self):
         return chain(self.words(), self.entities())
 
-    def words(self):
+    def words(self, ordered=False):
         cdef unicode word
         cdef int32_t index
 
-        for (word, index) in six.iteritems(self._word_dict):
-            yield Word(word, index, *self._word_stats[index])
+        if ordered:
+            indexes = np.argsort(self._word_stats[:,0])[::-1]
+            for index in indexes:
+                word = self._word_dict.restore_key(index)
+                yield Word(word, index, *self._word_stats[index])
+        else:
+            for (word, index) in six.iteritems(self._word_dict):
+                yield Word(word, index, *self._word_stats[index])
 
-    def entities(self):
+    def entities(self, ordered=False):
         cdef unicode title
         cdef int32_t index
 
-        for (title, index) in six.iteritems(self._entity_dict):
-            yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
+        if ordered:
+            indexes = np.argsort(self._entity_stats[:,0])[::-1]
+            for index in indexes:
+                title = self._entity_dict.restore_key(index)
+                yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
+        else:
+            for (title, index) in six.iteritems(self._entity_dict):
+                yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
 
     cpdef get_word(self, unicode word, default=None):
         cdef int32_t index
