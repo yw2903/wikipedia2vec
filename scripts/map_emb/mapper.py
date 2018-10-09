@@ -1,59 +1,31 @@
 import numpy as np
 import logging
 import collections
+from collections import defaultdict
 from wikipedia2vec import Wikipedia2Vec
+from utils import *
+import cupy
 
 logger = logging.getLogger(__name__)
 
-def length_normalize(matrix):
-    norms = np.sqrt(np.sum(matrix**2, axis=1))
-    norms[norms == 0] = 1
-    matrix /= norms[:, np.newaxis]
-
-
-def mean_center(matrix):
-    avg = np.mean(matrix, axis=0)
-    matrix -= avg
-
-
-def length_normalize_dimensionwise(matrix):
-    norms = np.sqrt(np.sum(matrix**2, axis=0))
-    norms[norms == 0] = 1
-    matrix /= norms
-
-
-def mean_center_embeddingwise(matrix):
-    avg = np.mean(matrix, axis=1)
-    matrix -= avg[:, np.newaxis]
-
-
-def normalize(matrix, actions):
-    for action in actions:
-        if action == 'unit':
-            length_normalize(matrix)
-        elif action == 'center':
-            mean_center(matrix)
-        elif action == 'unitdim':
-            length_normalize_dimensionwise(matrix)
-        elif action == 'centeremb':
-            mean_center_embeddingwise(matrix)
-
 def dropout_matrix(m, p):
+    xp = array_module(m)
     if p <= 0.0:
         return m
     else:
-        mask = np.random.rand(*m.shape) >= p
+        mask = xp.random.rand(*m.shape) >= p
         return m*mask
 
 def topk_mean(m, k, inplace=True):  
+    xp = array_module(m)
     n = m.shape[0]
-    ans = np.zeros(n, dtype=m.dtype)
+    ans = xp.zeros(n, dtype=m.dtype)
     if k <= 0:
         return ans
     if not inplace:
-        m = np.array(m)
-    ind0 = np.arange(n)
-    ind1 = np.empty(n, dtype=int)
+        m = xp.array(m)
+    ind0 = xp.arange(n)
+    ind1 = xp.empty(n, dtype=int)
     minimum = m.min()
     for i in range(k):
         m.argmax(axis=1, out=ind1)
@@ -62,12 +34,14 @@ def topk_mean(m, k, inplace=True):
     return ans / k
 
 class Parameters:
-    def __init__(self, normalize, 
-            init_dropout, dropout_decay,
-            init_n_word, init_n_ent, 
-            n_word, n_ent,
-            threshold, interval,
-            csls, reweight, batchsize):
+    def __init__(self, fix_ent=True, normalize=['unit', 'mean_center', 'unit'], 
+            init_dropout=0.9, dropout_decay=2.0,
+            init_n_word=4000, init_n_ent=4000, 
+            n_word=10000, n_ent=10000,
+            threshold=1e-6, interval=50,
+            csls=10, reweight=0.5, batchsize=10000, langlink=None,
+            dev=None):
+        self.fix_ent = fix_ent
         self.normalize = normalize
         self.init_dropout = init_dropout
         self.dropout_decay = dropout_decay
@@ -80,47 +54,80 @@ class Parameters:
         self.csls = csls
         self.reweight = reweight
         self.batchsize = batchsize
-
-class Lang:
-    def __init__(self, wiki, normalize=['unit', 'center', 'unit']):
-        self.wiki = wiki
-        self.dic = wiki.dictionary
-        self.emb = wiki.syn0
-        normalize(self.emb, normalize)
-        self.word_emb, self.word2id = self.get_item_emb(self.dic.words())
-        self.ent_emb, self.ent2id = self.get_item_emb(self.dic.entities())
-
-    def get_item_emb(self, items):
-        items = sorted(items, key=lambda item: item.count, reverse=True)
-        emb = np.empty((len(items), self.emb.shape[1]), dtype=np.float32)
-        item2id = {}
-        
-        for i, item in enumerate(items):
-            emb[i] = self.emb[item.index]
-            item2id[item.index] = i
-
-        return emb, item2id
-
-    def __len__(self):
-        return self.emb.shape[0]
+        self.langlink = langlink
+        self.dev = dev 
 
 class Mapper:
     def __init__(self, src_wiki, trg_wiki, params):
-        self.src = Lang(src_wiki, params.normalize)
-        self.trg = Lang(trg_wiki, params.normalize)
-
-        self.dim = self.src.emb.shape[1]
         self.params = params
+        self.src_wiki = src_wiki
+        self.trg_wiki = trg_wiki
 
-        self.word_gold = None
+        self.dim = src_wiki.syn0.shape[1]
 
-        # Induced Dictionary
-        self.src_ent_ind = []
-        self.trg_ent_ind = []
-        self.src_word_ind = []
-        self.trg_word_ind = []
+        # They should be in GPU
+        self.src_word2id, self.src_word_emb = get_word_emb(src_wiki, params.n_word)
+        self.trg_word2id, self.trg_word_emb = get_word_emb(trg_wiki, params.n_word)
+        self.src_ent2id, self.src_ent_emb = get_entity_emb(src_wiki, params.n_ent)
+        self.trg_ent2id, self.trg_ent_emb = get_entity_emb(trg_wiki, params.n_ent)
 
-    def init_ent_supervised(self, path):
+        self.src_n_word = self.src_word_emb.shape[0]
+        self.trg_n_word = self.trg_word_emb.shape[0]
+
+        xp = self.xp = array_module(self.src_word_emb)
+        self.src_emb = xp.concatenate((self.src_word_emb, self.src_ent_emb), axis=0)
+        self.trg_emb = xp.concatenate((self.trg_word_emb, self.trg_ent_emb), axis=0)
+
+    def _normalize(self, emb, normalization=['unit', 'mean_center', 'unit']):
+        for n in normalization:
+            normalize(emb, n)
+
+    def initialize(self):
+        xp = self.xp
+        # First normalize
+        #   RQ: normalizationはwordとentityに同時にかけるべき？
+        self._normalize(self.src_emb)
+        self._normalize(self.trg_emb)
+        self.src_emb_mapped = xp.copy(self.src_emb)
+        self.trg_emb_mapped = xp.copy(self.trg_emb)
+
+        # Initialize
+        if self.params.langlink:
+            self.init_ent_langlink(self.params.langlink)
+            self.src_word_ind = xp.array([], dtype=xp.int32)
+            self.trg_word_ind = xp.array([], dtype=xp.int32)
+        else:
+            self.src_ent_ind, self.trg_ent_ind = self.init_unsup(
+                    self.src_emb_mapped[self.src_n_word:], self.trg_emb_mapped[self.trg_n_word:], 
+                    self.params.init_n_ent, self.params.csls)
+
+            self.src_word_ind, self.trg_word_ind = self.init_unsup(
+                    self.src_emb_mapped[:self.src_n_word], self.trg_emb_mapped[:self.trg_n_word],
+                    self.params.init_n_word, self.params.csls)
+
+        # Load dev dict
+        if self.params.dev:
+            self.dev = defaultdict(set)
+            with open(self.params.dev) as f:
+                for line in f:
+                    src_word, trg_word = line.strip().lower().split()
+                    src_word = self.src_wiki.get_word(src_word)
+                    trg_word = self.trg_wiki.get_word(trg_word)
+                    
+                    if not src_word or not trg_word:
+                        continue
+
+                    if src_word.index in self.src_word2id and trg_word.index in self.trg_word2id:
+                        src_ind = self.src_word2id[src_word.index]
+                        trg_ind = self.trg_word2id[trg_word.index]
+                        self.dev[src_ind].add(trg_ind)
+        else:
+            self.dev = None
+
+    def init_ent_langlink(self, path):
+        xp = self.xp
+        src_ent_ind = []
+        trg_ent_ind = []
         with open(path) as f:
             for line in f:
                 line = line.strip()
@@ -129,221 +136,244 @@ class Mapper:
 
                 src_title, trg_title = line.split()
 
-                src_ent = self.src.dic.get_entity(src_title)
-                trg_ent = self.trg.dic.get_entity(trg_title)
+                src_ent = self.src_wiki.dictionary.get_entity(src_title)
+                trg_ent = self.trg_wiki.dictionary.get_entity(trg_title)
 
-                if src_ent and trg_ent:
-                    self.src_ent_ind.append(self.src.ent2id[src_ent.index])
-                    self.trg_ent_ind.append(self.trg.ent2id[trg_ent.index])
+                if not src_ent or not trg_ent:
+                    continue
+
+                if src_ent.index in self.src_ent2id and trg_ent.index in self.trg_ent2id:
+                    src_ent_ind.append(self.src_ent2id[src_ent.index])
+                    trg_ent_ind.append(self.trg_ent2id[trg_ent.index])
+
+        self.src_ent_ind = xp.array(src_ent_ind, dtype=xp.int32)
+        self.trg_ent_ind = xp.array(trg_ent_ind, dtype=xp.int32)
 
     def init_unsup(self, x, z, n_vocab, csls_neighbor=10):
+        xp = self.xp
         sim_size = min(x.shape[0], z.shape[0])
         if n_vocab:
             sim_size = min(sim_size, n_vocab)
 
-        u, s, vt = np.linalg.svd(x[:sim_size], full_matrices=False)
+        u, s, vt = xp.linalg.svd(x[:sim_size], full_matrices=False)
         xsim = (u*s).dot(u.T)
-        u, s, vt = np.linalg.svd(z[:sim_size], full_matrices=False)
+        u, s, vt = xp.linalg.svd(z[:sim_size], full_matrices=False)
         zsim = (u*s).dot(u.T)
         del u, s, vt
         xsim.sort(axis=1)
         zsim.sort(axis=1)
-        normalize(xsim, self.params.normalize)
-        normalize(zsim, self.params.normalize)
+        self._normalize(xsim)
+        self._normalize(zsim)
         sim = xsim.dot(zsim.T)
 
         knn_sim_fwd = topk_mean(sim, k=csls_neighbor)
         knn_sim_bwd = topk_mean(sim.T, k=csls_neighbor)
-        sim -= knn_sim_fwd[:, np.newaxis]/2 + knn_sim_bwd/2
+        sim -= knn_sim_fwd[:, xp.newaxis]/2 + knn_sim_bwd/2
 
-        src_indices = np.concatenate((np.arange(sim_size), sim.argmax(axis=0)))
-        trg_indices = np.concatenate((sim.argmax(axis=1), np.arange(sim_size)))
+        src_indices = xp.concatenate((xp.arange(sim_size), sim.argmax(axis=0)))
+        trg_indices = xp.concatenate((sim.argmax(axis=1), xp.arange(sim_size)))
         del xsim, zsim, sim
 
-        return list(src_indices), list(trg_indices)
+        return src_indices, trg_indices
 
-    def init_word_unsup(self, n_word, csls_neighbor=10):
-        src_ind, trg_ind = self.init_unsup(self.src.word_emb, self.trg.word_emb, 
-                n_word, csls_neighbor)
-        self.src_word_ind = src_ind
-        self.trg_word_ind = trg_ind
+    def orthogonal_map(self):
+        xp = self.xp
+        src_indices = xp.concatenate((self.src_word_ind, self.src_ent_ind + self.src_n_word))
+        trg_indices = xp.concatenate((self.trg_word_ind, self.trg_ent_ind + self.src_n_word))
 
-    def init_ent_unsup(self, n_ent, csls_neighbor=10):
-        src_ind, trg_ind = self.init_unsup(src.ent_emb, trg.ent_emb, n_ent, csls_neighbor)
-        self.src_ent_ind = src_ind
-        self.trg_ent_ind = trg_ind
+        src_ind_emb = self.src_emb[src_indices]
+        trg_ind_emb = self.trg_emb[trg_indices]
 
-    def learn_mapping(self, reweight=0.5):
-        n_src_word = self.src.word_emb.shape[0]
-        n_trg_word = self.trg.word_emb.shape[0]
-        xw = np.concatenate((self.src.word_emb, self.src.ent_emb), axis=0)
-        zw = np.concatenate((self.trg.word_emb, self.trg.ent_emb), axis=0)
+        u, s, vt = xp.linalg.svd(trg_ind_emb.T.dot(src_ind_emb))
+        w = vt.T.dot(u.T)
+        self.src_emb.dot(w, out=self.src_emb_mapped)
+        self.trg_emb_mapped[:] = self.trg_emb
 
-        src_indices = self.src_word_ind + [idx+n_src_word for idx in self.src_ent_ind]
-        trg_indices = self.trg_word_ind + [idx+n_trg_word for idx in self.trg_ent_ind]
+    def advanced_map(self, reweight=0.5):
+        # ToDo: この手法は最後だけ
+        xp = self.xp
+        src_indices = xp.concatenate((self.src_word_ind, self.src_ent_ind + self.src_n_word))
+        trg_indices = xp.concatenate((self.trg_word_ind, self.trg_ent_ind + self.src_n_word))
 
+        src_ind_emb = self.src_emb[src_indices]
+        trg_ind_emb = self.trg_emb[trg_indices]
+
+        # STEP1: Whitening
         def whitening_transformation(m):
-            u, s, vt = np.linalg.svd(m, full_matrices=False)
-            return vt.T.dot(np.diag(1/s)).dot(vt)
-        wx1 = whitening_transformation(xw[src_indices])
-        wz1 = whitening_transformation(zw[trg_indices])
-        xw = xw.dot(wx1)
-        zw = zw.dot(wz1)
+            u, s, vt = xp.linalg.svd(m, full_matrices=False)
+            return vt.T.dot(xp.diag(1/s)).dot(vt)
 
-        wx2, s, wz2_t = np.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-        wz2 = wz2_t.T
-        xw = xw.dot(wx2)
-        zw = zw.dot(wz2)
+        self.src_whitener = whitening_transformation(src_ind_emb)
+        self.trg_whitener = whitening_transformation(trg_ind_emb)
+        self.src_emb_mapped = self.src_emb.dot(self.src_whitener)
+        self.trg_emb_mapped = self.trg_emb.dot(self.trg_whitener)
 
-        xw *= s**reweight
-        zw *= s**reweight
+        # STEP2: Orthogonal Mapping
+        self.src_map, self.s, trg_map_t = xp.linalg.svd(src_ind_emb.T.dot(trg_ind_emb))
+        self.trg_map = trg_map_t.T
+        self.src_emb_mapped = self.src_emb_mapped.dot(self.src_map)
+        self.trg_emb_mapped = self.trg_emb_mapped.dot(self.trg_map)
 
-        xw = xw.dot(wx2.T.dot(np.linalg.inv(wx1)).dot(wx2))
-        zw = zw.dot(wz2.T.dot(np.linalg.inv(wz1)).dot(wz2))
+        # STEP3: Re-weightening
+        self.src_emb_mapped *= self.s**0.5
+        self.trg_emb_mapped *= self.s**0.5
 
-        self.src_word_mapped = xw[:n_src_word]
-        self.src_ent_mapped = xw[n_src_word:]
-        self.trg_word_mapped = zw[:n_trg_word]
-        self.trg_ent_mapped = zw[n_trg_word:]
+        # STEP4: De-whitening
+        src_dewhitener = self.src_map.T.dot(xp.linalg.inv(self.src_whitener)).dot(self.src_map)
+        trg_dewhitener = self.trg_map.T.dot(xp.linalg.inv(self.trg_whitener)).dot(self.trg_map)
+        self.src_emb_mapped = self.src_emb_mapped.dot(src_dewhitener)
+        self.trg_emb_mapped = self.trg_emb_mapped.dot(trg_dewhitener)
 
-    def induce_word_dic(self, n_word, 
-            direction='union', csls_neighbor=10, batchsize=1000, dropout=0.0):
-        src_ind, trg_ind, obj = self.induce_dic(
-                self.src_word_mapped[:n_word], self.trg_word_mapped[:n_word],
-                direction, csls_neighbor, batchsize, dropout)
-        self.src_word_ind = src_ind
-        self.trg_word_ind = trg_ind
-        self.word_obj = obj
+    def induce_dic(self, src_emb, trg_emb, dropout=0.0):
+        xp = self.xp
+        src_size = src_emb.shape[0]
+        trg_size = trg_emb.shape[0]
 
-    def induce_ent_dic(self, n_ent, 
-            direction='union', csls_neighbor=10, batchsize=1000, dropout=0.0):
-        src_ind, trg_ind, obj = self.induce_dic(
-                self.src_ent_mapped[:n_ent], self.trg_ent_mapped[:n_ent],
-                direction, csls_neighbor, batchsize, dropout)
-        self.src_ent_ind = src_ind
-        self.trg_ent_ind = trg_ind
-        self.ent_obj = obj
+        # Allocation Memory
+        sim_src2trg = xp.empty((self.params.batchsize, trg_size), dtype=xp.float32)
+        sim_trg2src = xp.empty((self.params.batchsize, src_size), dtype=xp.float32)
+        knn_sim_src2trg = xp.zeros(src_size, dtype=xp.float32)
+        knn_sim_trg2src = xp.zeros(trg_size, dtype=xp.float32)
+        best_sim_src2trg = xp.full(src_size, -100, dtype=xp.float32)
+        best_sim_trg2src = xp.full(trg_size, -100, dtype=xp.float32)
+        trg_indices_forward = xp.zeros(src_size, dtype=int)
+        trg_indices_backward = xp.arange(trg_size)
+        src_indices_forward = xp.arange(src_size)
+        src_indices_backward = xp.zeros(trg_size, dtype=int)
 
-    def induce_dic(self, xw, zw, 
-            direction='union', csls_neighbor=10, batchsize=10000, dropout=0.0):
-        trg_size = zw.shape[0]
-        src_size = xw.shape[0]
-        simfwd = np.empty((batchsize, trg_size), dtype='float32')
-        simbwd = np.empty((batchsize, src_size), dtype='float32')
-        knn_sim_fwd = np.zeros(src_size, dtype='float32')
-        knn_sim_bwd = np.zeros(trg_size, dtype='float32')
-        best_sim_forward = np.full(src_size, -100, dtype='float32')
-        best_sim_backward = np.full(trg_size, -100, dtype='float32')
-        trg_indices_forward = np.zeros(src_size, dtype=int)
-        trg_indices_backward = np.arange(trg_size)
-        src_indices_forward = np.arange(src_size)
-        src_indices_backward = np.zeros(trg_size, dtype=int)
 
-        # Update the training dictionary
-        if direction in ('forward', 'union'):
-            if csls_neighbor > 0:
-                for i in range(0, trg_size, batchsize):
-                    j = min(i + batchsize, trg_size)
-                    zw[i:j].dot(xw[:src_size].T, out=simbwd[:j-i])
-                    knn_sim_bwd[i:j] = topk_mean(simbwd[:j-i], k=csls_neighbor)
-            for i in range(0, src_size, simfwd.shape[0]):
-                j = min(i + batchsize, src_size)
-                xw[i:j].dot(zw[:trg_size].T, out=simfwd[:j-i])
-                simfwd[:j-i].max(axis=1, out=best_sim_forward[i:j])
-                simfwd[:j-i] -= knn_sim_bwd/2  # Equivalent to the real CSLS scores for NN
-                dropout_matrix(simfwd[:j-i], dropout).argmax(axis=1, out=trg_indices_forward[i:j])
-        if direction in ('backward', 'union'):
-            if csls_neighbor > 0:
-                for i in range(0, src_size, batchsize):
-                    j = min(i + batchsize, src_size)
-                    xw[i:j].dot(zw[:trg_size].T, out=simfwd[:j-i])
-                    knn_sim_fwd[i:j] = topk_mean(simfwd[:j-i], k=csls_neighbor)
-            for i in range(0, trg_size, batchsize):
-                j = min(i + batchsize, trg_size)
-                zw[i:j].dot(xw[:src_size].T, out=simbwd[:j-i])
-                simbwd[:j-i].max(axis=1, out=best_sim_backward[i:j])
-                simbwd[:j-i] -= knn_sim_fwd/2  # Equivalent to the real CSLS scores for NN
-                dropout_matrix(simbwd[:j-i], dropout).argmax(axis=1, out=src_indices_backward[i:j])
-        if direction == 'forward':
-            src_indices = src_indices_forward
-            trg_indices = trg_indices_forward
-        elif direction == 'backward':
-            src_indices = src_indices_backward
-            trg_indices = trg_indices_backward
-        elif direction == 'union':
-            src_indices = np.concatenate((src_indices_forward, src_indices_backward))
-            trg_indices = np.concatenate((trg_indices_forward, trg_indices_backward))
+        # Compute k-NN mean of cosine similarity of backward for forward CSLS        
+        for b_start in range(0, trg_size, self.params.batchsize):
+            b_end = min(b_start+self.params.batchsize, trg_size)
+            _batchsize = b_end - b_start
+            trg_emb[b_start:b_end].dot(src_emb[:src_size].T, out=sim_trg2src[:_batchsize])
+            knn_sim_trg2src[b_start:b_end] = topk_mean(sim_trg2src[:_batchsize], k=self.params.csls)
+
+        # Compute CSLS for forward
+        # sim_src2trg[0] == self.params.batchsize
+        for b_start in range(0, src_size, sim_src2trg.shape[0]):
+            b_end = min(b_start+self.params.batchsize, src_size)
+            _batchsize = b_end - b_start
+            sim_src2trg[:_batchsize] = src_emb[b_start:b_end].dot(trg_emb[:trg_size].T)
+            sim_src2trg[:_batchsize].max(axis=1, out=best_sim_src2trg[b_start:b_end])
+            sim_src2trg[:_batchsize] -= knn_sim_trg2src/2  # Equivalent to the real CSLS scores for NN
+            dropout_matrix(sim_src2trg[:_batchsize], dropout).argmax(axis=1, out=trg_indices_forward[b_start:b_end])
+
+        # Compute k-NN mean of cosine similarity of forward for backward CSLS        
+        for b_start in range(0, src_size, self.params.batchsize):
+            b_end = min(b_start+self.params.batchsize, src_size)
+            _batchsize = b_end - b_start
+            src_emb[b_start:b_end].dot(trg_emb[:src_size].T, out=sim_src2trg[:_batchsize])
+            knn_sim_src2trg[b_start:b_end] = topk_mean(sim_src2trg[:_batchsize], k=self.params.csls)
+
+        # Compute CSLS for forward
+        # sim_src2trg[0] == self.params.batchsize
+        for b_start in range(0, trg_size, sim_trg2src.shape[0]):
+            b_end = min(b_start+self.params.batchsize, trg_size)
+            _batchsize = b_end - b_start
+            trg_emb[b_start:b_end].dot(src_emb[:src_size].T, out=sim_trg2src[:_batchsize])
+            sim_trg2src[:_batchsize].max(axis=1, out=best_sim_trg2src[b_start:b_end])
+            sim_trg2src[:_batchsize] -= knn_sim_src2trg/2  # Equivalent to the real CSLS scores for NN
+            dropout_matrix(sim_trg2src[:_batchsize], dropout).argmax(axis=1, out=src_indices_backward[b_start:b_end])
+
+        src_indices = xp.concatenate((src_indices_forward, src_indices_backward))
+        trg_indices = xp.concatenate((trg_indices_forward, trg_indices_backward))
 
         # Objective function evaluation
-        if direction == 'forward':
-            objective = np.mean(best_sim_forward).tolist()
-        elif direction == 'backward':
-            objective = np.mean(best_sim_backward).tolist()
-        elif direction == 'union':
-            fwd_mean = np.mean(best_sim_forward)
-            bwd_mean = np.mean(best_sim_backward)
-            objective = (fwd_mean + bwd_mean) / 2
+        fwd_mean = xp.mean(best_sim_src2trg)
+        bwd_mean = xp.mean(best_sim_trg2src)
+        objective = (fwd_mean + bwd_mean) / 2
 
-        return list(src_indices), list(trg_indices), objective
+        return src_indices, trg_indices, objective
 
-    def train(self, fix_ent, n_word=10000, n_ent=10000, 
-            init_dropout=0.9, interval=5, dropout_decay=2.0, threshold=1e-6):
+    def train(self):
         best_obj = obj = -100
         it = 1
         last_improvement = 0
-        dropout = init_dropout
+        dropout = self.params.init_dropout
         while True:
-            if it - last_improvement > interval:
+            # Did we improve enough in the last iteration?
+            if it - last_improvement > self.params.interval:
                 if dropout <= 0.0:
                     break
-                dropout = 1-min(1.0, dropout_decay * (1-dropout))
+                dropout = 1-min(1.0, self.params.dropout_decay * (1-dropout))
                 last_improvement = it
 
-            self.learn_mapping()
-            self.induce_word_dic(n_word, dropout=dropout)
-            obj = self.word_obj
-            if not fix_ent:
-                self.induce_ent_dic(n_ent, dropout=dropout)
-                obj = (obj + self.ent_obj) / 2
+            # Learn Mapping
+            self.orthogonal_map()
 
-            if obj - best_obj >= threshold:
+            # Induce word dictionary
+            self.src_word_ind, self.trg_word_ind, word_obj = self.induce_dic(
+                    self.src_emb_mapped[:self.params.n_word], 
+                    self.trg_emb_mapped[:self.params.n_word],
+                    dropout=dropout)
+
+            # Induce entity dictionary
+            if not self.params.fix_ent:
+                self.src_ent_ind, self.trg_ent_ind, ent_obj = self.induce_dic(
+                        self.src_emb_mapped[self.params.n_word:],
+                        self.trg_emb_mapped[self.params.n_word:],
+                        dropout=dropout)
+                obj = (word_obj + ent_obj) / 2
+            else:
+                obj = word_obj
+
+            # Compare objectives
+            if obj - best_obj >= self.params.threshold:
                 last_improvement = it
                 best_obj = obj
 
-            if self.word_gold:
-                acc, sim = self.validate_word()
-                logger.info("iter={}; dropout={:.3f}; obj={:.3f}; acc={:.3f}; sim={:.3f}".format(
-                    it, dropout, obj, acc, sim))
+            if self.dev:
+                logger.info("iter={}; dropout={:.3f}; obj={:.3f}; dev={:.3f}".format(it, dropout, float(obj), self.validate()))
             else:
-                logger.info("iter={}; dropout={:.3f}; obj={:.3f}".format(it, dropout, obj))
+                logger.info("iter={}; dropout={:.3f}; obj={:.3f}".format(it, dropout, float(obj)))
 
             it += 1
 
-        src_wiki = self.get_wiki(self.src, self.src_word_mapped, self.src_ent_mapped)
-        trg_wiki = self.get_wiki(self.trg, self.trg_word_mapped, self.trg_ent_mapped)
-        return src_wiki, trg_wiki
+        self.advanced_map()
 
-    def get_wiki(self, lang, word_mapped, ent_mapped):
-        wiki = Wikipedia2Vec(lang.dic)
-        wiki.syn0 = np.empty((len(lang), self.dim), dtype=np.float32)
+        # ToDo: Embedding全体にadvanced mapを掛けてwikipedia2vecの形にして返す
 
-        for item_ind, ind in lang.word2id.items():
-            wiki.syn0[item_ind] = word_mapped[ind]
+    def map_wiki(self, wiki, whitener, w):
+        emb = wiki.syn0
+        self._normalize(emb)
 
-        for item_ind, ind in lang.ent2id.items():
-            wiki.syn0[item_ind] = ent_mapped[ind]
-        
-        return wiki
-        
+        # Whiten
+        emb.dot(self.xp.asnumpy(whitener), out=emb)
 
-    def validate(self, xw, zw, gold):
-        src = list(gold.keys())
-        simval = xw[src].dot(zw.T)
-        nn = simval.argmax(axis=1)
-        accuracy = np.mean([1 if nn[i] in gold[src[i]] else 0 for i in range(len(src))])
-        similarity = np.mean([max([simval[i, j] for j in gold[src[i]]] 
-            for i in range(len(src)))])
-        return accuracy, similarity
+        # Orthogonal Map
+        emb.dot(self.xp.asnumpy(w), out=emb)
+
+        # Reweighting
+        emb *= self.s**0.5
+
+        # De-whiten
+        dewhitener = w.T.dot(xp.linalg.inv(whitener)).dot(w)
+        emb.dot(self.xp.asnumpy(dewhitener), out=emb)
+
+        wiki.syn0 = emb 
+
+        return wiki.syn0
+
+    def map_src(self, wiki):
+        return self.map_wiki(wiki, self.src_whitener, self.src_map)
+
+    def map_trg(self, wiki):
+        return self.map_wiki(wiki, self.trg_whitener, self.trg_map)
+
+    def validate(self):
+        xp = self.xp
+        correct = 0
+        N = 0
+        for src_id, trg_ids in self.dev.items():
+            N += 1
+            src_vec = self.src_emb_mapped[src_id]
+            pred_id = xp.argmax(self.trg_emb_mapped.dot(src_vec))
+            if int(pred_id) in trg_ids:
+                correct += 1
+
+        return correct / N
+
 
     def set_word_validation(self, path, n_word):
         oov = set()

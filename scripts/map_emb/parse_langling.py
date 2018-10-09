@@ -5,7 +5,8 @@ from urllib.parse import urlparse
 
 @click.command()
 @click.argument('input', type=click.Path(exists=True))
-def main(input):
+@click.option('--prefix/--no-prefix', default=False)
+def main(input, prefix):
     with bz2.open(input, 'rt') as f:
         count = 0
         for i, line in enumerate(f):
