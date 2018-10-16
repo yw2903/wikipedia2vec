@@ -29,8 +29,7 @@ logger = logging.getLogger(__name__)
 @click.option('--reweight', type=float, default=0.5)
 @click.option('--batchsize', type=int, default=10000)
 @click.option('--validation', type=click.Path(exists=True))
-def main(src_input, trg_input, src_output, trg_output, langlink, validation,
-        **kwargs):
+def main(src_input, trg_input, src_output, trg_output, **kwargs):
     params = Parameters(**kwargs)
 
     logger.info("Loading wiki")
@@ -40,19 +39,8 @@ def main(src_input, trg_input, src_output, trg_output, langlink, validation,
     logger.info("Creating mapper")
     mapper = Mapper(src_wiki2vec, trg_wiki2vec, params)
 
-    if langlink:
-        logger.info("Loading langlink")
-        mapper.init_ent_supervised(langlink)
-        logger.info("Initializing word dict")
-        mapper.init_word_unsup(params.init_n_word)
-    else:
-        logger.info("Initializing entity dict")
-        mapper.init_ent_unsup(params.init_n_ent)
-        logger.info("Initializing word dict")
-        mapper.init_word_unsup(params.init_n_word)
-
-    if validation:
-        mapper.set_word_validation(validation, 20000)
+    logger.info("Initialize")
+    mapper.initialize()
 
     logger.info("Training")
     src_mapped, trg_mapped = mapper.train()
@@ -60,7 +48,6 @@ def main(src_input, trg_input, src_output, trg_output, langlink, validation,
     logger.info("Saving")
     src_mapped.save(src_output)
     trg_mapped.save(trg_output)
-
 
 if __name__ == '__main__':
     main()

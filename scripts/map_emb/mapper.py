@@ -40,7 +40,7 @@ class Parameters:
             n_word=10000, n_ent=10000,
             threshold=1e-6, interval=50,
             csls=10, reweight=0.5, batchsize=10000, langlink=None,
-            dev=None):
+            validation=None):
         self.fix_ent = fix_ent
         self.normalize = normalize
         self.init_dropout = init_dropout
@@ -55,7 +55,7 @@ class Parameters:
         self.reweight = reweight
         self.batchsize = batchsize
         self.langlink = langlink
-        self.dev = dev 
+        self.dev = validation 
 
 class Mapper:
     def __init__(self, src_wiki, trg_wiki, params):
@@ -333,19 +333,25 @@ class Mapper:
         self.advanced_map()
 
         # ToDo: Embedding全体にadvanced mapを掛けてwikipedia2vecの形にして返す
+        logger.info("Mapping entire embeddings")
+        src_mapped = self.map_src(self.src_wiki)
+        trg_mapped = self.map_trg(self.trg_wiki)
+
+        return src_mapped, trg_mapped
 
     def map_wiki(self, wiki, whitener, w):
-        emb = wiki.syn0
+        xp = self.xp
+        emb = np.copy(wiki.syn0)
         self._normalize(emb)
 
         # Whiten
-        emb.dot(self.xp.asnumpy(whitener), out=emb)
+        emb.dot(xp.asnumpy(whitener), out=emb)
 
         # Orthogonal Map
-        emb.dot(self.xp.asnumpy(w), out=emb)
+        emb.dot(xp.asnumpy(w), out=emb)
 
         # Reweighting
-        emb *= self.s**0.5
+        emb *= xp.asnumpy(self.s)**0.5
 
         # De-whiten
         dewhitener = w.T.dot(xp.linalg.inv(whitener)).dot(w)
@@ -353,7 +359,7 @@ class Mapper:
 
         wiki.syn0 = emb 
 
-        return wiki.syn0
+        return wiki
 
     def map_src(self, wiki):
         return self.map_wiki(wiki, self.src_whitener, self.src_map)
