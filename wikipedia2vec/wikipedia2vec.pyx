@@ -161,7 +161,7 @@ cdef class Wikipedia2Vec:
                 if i >= words:
                     break
 
-                vec_str = ' '.join('{:.4f}'.format(v) for v in self.get_vector(word))
+                vec_str = ' '.join('{:.8f}'.format(v) for v in self.get_vector(word))
 
                 if out_format in ('word2vec', 'glove'):
                     f.write("{} {}\n".format(word.text, vec_str))
@@ -172,7 +172,7 @@ cdef class Wikipedia2Vec:
                 if i >= entities:
                     break
 
-                vec_str = ' '.join('{:.4f}'.format(v) for v in self.get_vector(word))
+                vec_str = ' '.join('{:.8f}'.format(v) for v in self.get_vector(word))
 
                 if out_format in ('word2vec', 'glove'):
                     f.write("ENTITY/{} {}\n".format(entity.title, vec_str))
@@ -185,7 +185,7 @@ cdef class Wikipedia2Vec:
                 f.write(('%d %d\n' % (len(self.dictionary), len(self.syn0[0]))).encode('utf-8'))
 
             for item in sorted(self.dictionary, key=lambda o: o.doc_count, reverse=True):
-                vec_str = ' '.join('%.4f' % v for v in self.get_vector(item))
+                vec_str = ' '.join('%.8f' % v for v in self.get_vector(item))
                 if isinstance(item, Word):
                     text = item.text.replace('\t', ' ')
                 else:
