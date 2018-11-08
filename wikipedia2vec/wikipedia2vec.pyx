@@ -142,12 +142,27 @@ cdef class Wikipedia2Vec:
             train_params=self._train_params
         ), out_file)
 
-    def save_text(self, out_file, out_format='default'):
+    def save_text(self, out_file, order_by=None, n_words=None, n_entities=None, out_format='default'):
+        if order_by is None:
+            n_items = len(self.dictionary)
+            def iterator():
+                return self.dictionary
+        elif order_by in ('word_count', 'word_doc_count'):
+            n_words = n_words or self.dictionary.word_size
+            n_entities = n_entities or self.dictionary.entity_size
+            n_items = n_words + n_entities
+
+            def iterator():
+                for word in self.dictionary.words(order_by, n_words):
+                    yield word
+                for ent in self.dictionary.entities(order_by, n_entities):
+                    yield ent
+
         with open(out_file, 'wb') as f:
             if out_format == 'word2vec':
-                f.write(('%d %d\n' % (len(self.dictionary), len(self.syn0[0]))).encode('utf-8'))
+                f.write(('%d %d\n' % (n_items, len(self.syn0[0]))).encode('utf-8'))
 
-            for item in sorted(self.dictionary, key=lambda o: o.doc_count, reverse=True):
+            for item in iterator():
                 vec_str = ' '.join('%.4f' % v for v in self.get_vector(item))
                 if isinstance(item, Word):
                     text = item.text.replace('\t', ' ')
