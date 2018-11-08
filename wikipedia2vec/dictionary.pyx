@@ -98,12 +98,24 @@ cdef class Dictionary:
     def __iter__(self):
         return chain(self.words(), self.entities())
 
-    def words(self):
+    def words(self, order_by=None):
+        """
+        order_by:
+            None (default) -> do not order words
+            'word_count' -> How many times the word occure in the entire corpus
+            'word_doc_count' -> In how many documents the word occure
+        """
         cdef unicode word
         cdef int32_t index
 
-        for (word, index) in six.iteritems(self._word_dict):
-            yield Word(word, index, *self._word_stats[index])
+        if order_by is None
+            for (word, index) in six.iteritems(self._word_dict):
+                yield Word(word, index, *self._word_stats[index])
+        elif order_by in ('word_count', 'word_doc_count'):
+            order_key = 0 if order_by == 'word_count' else 1
+            for idx in np.argsort(self._word_stats[:, order_key])[::-1]:
+                word = self.get_entity_by_index(idx)
+                yield Word(word, index, *self._word_stats[idx])
 
     def entities(self):
         cdef unicode title

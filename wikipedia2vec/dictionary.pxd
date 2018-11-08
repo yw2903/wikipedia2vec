@@ -27,6 +27,9 @@ cdef class Dictionary:
     cdef _word_dict
     cdef _entity_dict
     cdef _redirect_dict
+    # _word_stats: (n_vocab, 2)
+    #   First column: word_count (how many times the word occure in the corpus)
+    #   First column: word_doc_count (in how many documents the word occure)
     cdef readonly const int32_t [:, :] _word_stats
     cdef readonly const int32_t [:, :] _entity_stats
     cdef int32_t _entity_offset
