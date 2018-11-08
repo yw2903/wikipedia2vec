@@ -98,7 +98,7 @@ cdef class Dictionary:
     def __iter__(self):
         return chain(self.words(), self.entities())
 
-    def words(self, order_by=None):
+    def words(self, order_by=None, n_words=None):
         """
         order_by:
             None (default) -> do not order words
@@ -113,10 +113,12 @@ cdef class Dictionary:
                 yield Word(word, index, *self._word_stats[index])
         elif order_by in ('word_count', 'word_doc_count'):
             order_key = 0 if order_by == 'word_count' else 1
-            for idx in np.argsort(self._word_stats[:, order_key])[::-1]:
+            for k, idx in enumerate(np.argsort(self._word_stats[:, order_key])[::-1]):
+                if n_words is not None and k >= n_words:
+                    break
                 yield self.get_word_by_index(idx)
 
-    def entities(self, order_by=None):
+    def entities(self, order_by=None, n_entities=None):
         cdef unicode title
         cdef int32_t index
 
@@ -125,7 +127,9 @@ cdef class Dictionary:
                 yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
         elif order_by in ('word_count', 'word_doc_count'):
             order_key = 0 if order_by == 'word_count' else 1
-            for idx in np.argsort(self._entity_stats[:, order_key])[::-1]:
+            for k, idx in enumerate(np.argsort(self._entity_stats[:, order_key])[::-1]):
+                if n_entities is not None and k >= n_entities:
+                    break
                 yield self.get_entity_by_index(idx + self._entity_offset)
 
     cpdef get_word(self, unicode word, default=None):
