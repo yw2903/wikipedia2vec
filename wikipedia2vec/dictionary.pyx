@@ -116,12 +116,17 @@ cdef class Dictionary:
             for idx in np.argsort(self._word_stats[:, order_key])[::-1]:
                 yield self.get_word_by_index(idx)
 
-    def entities(self):
+    def entities(self, order_by=None):
         cdef unicode title
         cdef int32_t index
 
-        for (title, index) in six.iteritems(self._entity_dict):
-            yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
+        if order_by is None:
+            for (title, index) in six.iteritems(self._entity_dict):
+                yield Entity(title, index + self._entity_offset, *self._entity_stats[index])
+        elif order_by in ('word_count', 'word_doc_count'):
+            order_key = 0 if order_by == 'word_count' else 1
+            for idx in np.argsort(self._entity_stats[:, order_key])[::-1]:
+                yield self.get_entity_by_index(idx + self._entity_offset)
 
     cpdef get_word(self, unicode word, default=None):
         cdef int32_t index
