@@ -108,14 +108,13 @@ cdef class Dictionary:
         cdef unicode word
         cdef int32_t index
 
-        if order_by is None
+        if order_by is None:
             for (word, index) in six.iteritems(self._word_dict):
                 yield Word(word, index, *self._word_stats[index])
         elif order_by in ('word_count', 'word_doc_count'):
             order_key = 0 if order_by == 'word_count' else 1
             for idx in np.argsort(self._word_stats[:, order_key])[::-1]:
-                word = self.get_entity_by_index(idx)
-                yield Word(word, index, *self._word_stats[idx])
+                yield self.get_word_by_index(idx)
 
     def entities(self):
         cdef unicode title
