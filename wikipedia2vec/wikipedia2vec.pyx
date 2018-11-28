@@ -148,8 +148,8 @@ cdef class Wikipedia2Vec:
             def iterator():
                 return self.dictionary
         elif order_by in ('word_count', 'word_doc_count'):
-            n_words = n_words or self.dictionary.word_size
-            n_entities = n_entities or self.dictionary.entity_size
+            n_words = n_words if n_words is not None else self.dictionary.word_size
+            n_entities = n_entities if n_entities is not None else self.dictionary.entity_size
             n_items = n_words + n_entities
 
             def iterator():
@@ -174,6 +174,16 @@ cdef class Wikipedia2Vec:
                     f.write(('%s %s\n' % (text, vec_str)).encode('utf-8'))
                 else:
                     f.write(('%s\t%s\n' % (text, vec_str)).encode('utf-8'))
+
+    def topk_word_emb(self, n_words, order_by='word_count'):
+        words = list(self.dictionary.words(order_by=order_by, n_words=n_words))
+        indices = [word.index for word in words]
+        return words, self.syn0[indices]
+        
+    def topk_entity_emb(self, n_entities, order_by='word_count'):
+        entities = list(self.dictionary.entities(order_by=order_by, n_entities=n_entities))
+        indices = [entity.index for entity in entities]
+        return entities, self.syn0[indices]
 
     @staticmethod
     def load(in_file, numpy_mmap_mode='c'):
