@@ -21,7 +21,7 @@ from tqdm import tqdm
 from uuid import uuid1
 
 from .dictionary cimport Dictionary, Entity
-from .dump_db cimport DumpDB, Paragraph, WikiLink
+from .dump_db cimport DumpDB, Paragraph, WikiLink, Clickstream_DB
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +101,15 @@ cdef class LinkGraph:
             cols = []
 
             with tqdm(total=dump_db.page_size(), mininterval=0.5, disable=not progressbar) as bar:
-                f = partial(_process_page, offset=dictionary.entity_offset)
+                f = partial(_process_page_2, offset=dictionary.entity_offset)
 
                 for ret in pool.imap_unordered(f, dump_db.titles(), chunksize=chunk_size):
                     if ret:
                         (page_indices, dest_indices) = ret
                         rows.append(page_indices)
-                        rows.append(dest_indices)
+                        #rows.append(dest_indices)
                         cols.append(dest_indices)
-                        cols.append(page_indices)
+                        #cols.append(page_indices)
 
                     bar.update(1)
 
@@ -140,6 +140,8 @@ cdef class LinkGraph:
 
 cdef DumpDB _dump_db = None
 cdef Dictionary _dictionary = None
+cdef Clickstream_DB _mylmdb = None
+
 
 
 def init_worker(dump_db, dictionary_obj):
