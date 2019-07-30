@@ -193,8 +193,9 @@ def build_dictionary(dump_db_file, out_file, tokenizer, **kwargs):
 @click.argument('dictionary_file', type=click.Path(exists=True))
 @click.argument('out_file', type=click.Path())
 @common_options
-def build_link_graph(dump_db_file, dictionary_file, out_file, **kwargs):
+def build_link_graph(dump_db_file, mylmdb, dictionary_file, out_file, **kwargs):
     dump_db = DumpDB(dump_db_file)
+    mylmdb = Clickstream_DB(mylmdb)
     dictionary = Dictionary.load(dictionary_file)
 
     link_graph = LinkGraph.build(dump_db, dictionary, **kwargs)
