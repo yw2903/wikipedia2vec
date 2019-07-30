@@ -16,6 +16,10 @@ cdef class DumpDB:
     cpdef list get_paragraphs(self, unicode)
     cdef list _deserialize_paragraphs(self, bytes)
 
+cdef class Clickstream_DB:
+    cdef _db_file
+    cdef _env
+    cdef list get_keys(self)
 
 cdef class Paragraph:
     cdef readonly unicode text

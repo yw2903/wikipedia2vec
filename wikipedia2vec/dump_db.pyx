@@ -22,6 +22,34 @@ logger = logging.getLogger(__name__)
 
 STYLE_RE = re.compile("'''*")
 
+cdef class Clickstream_DB:
+    def __init__(self, db_file):
+        self._db_file = db_file
+
+        self._env = lmdb.open(db_file, readonly=True, subdir=False, lock=False, max_dbs=3)
+    
+
+    def page_size(self):
+        with self._env.begin(db=self._db_file) as txn:
+            return txn.stat()['entries']
+
+    def titles(self):
+        cdef bytes key
+
+        with self._env.begin(db=self._db_file) as txn:
+            cur = txn.cursor()
+            for key in cur.iternext(values=False):
+                yield key.decode('utf-8')
+    
+    
+    cdef list get_keys(self):
+    
+
+        with self._env.begin(db=self._db_file) as txn:
+            
+            myList =  [key for key, _ in txn.cursor() ]
+
+        return myList
 
 cdef class Paragraph:
     def __init__(self, unicode text, list wiki_links, bint abstract):
