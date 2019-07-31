@@ -1,0 +1,21 @@
+site_name: Wikipedia2Vec
+site_description: Wikipedia2Vec is a tool used for obtaining embeddings (vector representations) of words and entities from Wikipedia. The emnbeddings can be used as word embeddings, entity embeddings, and the unified embeddings of words and entities.
+repo_url: https://github.com/wikipedia2vec/wikipedia2vec
+edit_uri: ""
+site_author: Studio Ousia
+pages:
+    - Home: index.md
+    - Introduction: intro.md
+    - User Guide:
+        - Installation: install.md
+        - Learning Embeddings: commands.md
+        - API Usage: usage.md
+    - Pretrained Embeddings: pretrained.md
+extra_css:
+    - css/extra.css
+theme:
+    name: mkdocs
+    custom_dir: docs/custom_theme
+markdown_extensions:
+    - toc:
+        permalink: 
